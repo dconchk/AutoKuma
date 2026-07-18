@@ -30,8 +30,8 @@ pub enum Error {
     #[error("It looks like the server is expecting a username/password, but none was provided")]
     NotAuthenticated,
 
-    /// Error when mfa is enabled, but no token/secret was provided.
-    #[error("MFA enabled, but no token/secret was provided")]
+    /// Error when TOTP is enabled, but no token/secret was provided.
+    #[error("TOTP enabled, but no token/secret was provided")]
     TokenRequired,
 
     /// Connection loss to Uptime Kuma.

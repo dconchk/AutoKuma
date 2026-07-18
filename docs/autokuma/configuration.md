@@ -17,14 +17,14 @@ AutoKuma is configured through environment variables or a configuration file. Al
 | `AUTOKUMA__LOG_DIR` | `log_dir` | Path to a directory where log files are stored |
 | `AUTOKUMA__ON_DELETE` | `on_delete` | What happens when an AutoKuma ID is no longer found: `delete` or `keep` |
 | `AUTOKUMA__DELETE_GRACE_PERIOD` | `delete_grace_period` | Seconds to wait before deleting an entity after its ID disappears |
+| `AUTOKUMA__RUN_ONCE` | `run_once` | Run one foreground synchronization and return its result |
 | `AUTOKUMA__INSECURE_ENV_ACCESS` | `insecure_env_access` | Allow templates to access all env variables (default: only `AUTOKUMA__ENV__*`) |
 | `AUTOKUMA__SNIPPETS__<NAME>` | `snippets.<name>` | Define a snippet named `<name>` |
 | `AUTOKUMA__KUMA__URL` | `kuma.url` | URL AutoKuma uses to connect to Uptime Kuma |
 | `AUTOKUMA__KUMA__USERNAME` | `kuma.username` | Uptime Kuma username |
 | `AUTOKUMA__KUMA__PASSWORD` | `kuma.password` | Uptime Kuma password |
-| `AUTOKUMA__KUMA__MFA_TOKEN` | `kuma.mfa_token` | One-time MFA token |
-| `AUTOKUMA__KUMA__MFA_SECRET` | `kuma.mfa_secret` | MFA secret for generating tokens automatically |
-| `AUTOKUMA__KUMA__AUTH_TOKEN` | `kuma.auth_token` | JWT auth token (alternative to username/password) |
+| `AUTOKUMA__KUMA__MFA_TOKEN` | `kuma.mfa_token` | One-time Better Auth TOTP code |
+| `AUTOKUMA__KUMA__MFA_SECRET` | `kuma.mfa_secret` | TOTP secret for generating codes automatically |
 | `AUTOKUMA__KUMA__HEADERS` | `kuma.headers` | Extra HTTP headers sent to Uptime Kuma |
 | `AUTOKUMA__KUMA__CONNECT_TIMEOUT` | `kuma.connect_timeout` | Timeout for the initial connection |
 | `AUTOKUMA__KUMA__CALL_TIMEOUT` | `kuma.call_timeout` | Timeout for API calls |
@@ -38,6 +38,10 @@ AutoKuma is configured through environment variables or a configuration file. Al
 | `AUTOKUMA__KUBERNETES__ENABLED` | `kubernetes.enabled` | Enable or disable the Kubernetes source |
 | `AUTOKUMA__FILES__ENABLED` | `files.enabled` | Enable or disable the Files source |
 | `AUTOKUMA__FILES__FOLLOW_SYMLINKS` | `files.follow_symlinks` | Follow symlinks when scanning for static monitors |
+
+Uptime Kuma 3 sessions are established through Better Auth before Socket.IO
+connects. Session cookies remain in process memory and are never written to
+configuration or disk.
 | `AUTOKUMA__FILES__PREPROCESS` | `files.preprocess` | Preprocess static monitor files as Tera templates before parsing (default: `false`). Allows use of `get_env` and other Tera expressions inside `.json`/`.toml` monitor files. The following filters are available to safely embed values into file contents: `json_escape` / `json_unescape` for JSON files, `toml_escape` / `toml_unescape` for TOML files |
 
 ## Secret Files

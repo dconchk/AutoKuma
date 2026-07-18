@@ -32,14 +32,6 @@ pub(crate) struct Cli {
     #[arg(long, global = true)]
     pub mfa_secret: Option<String>,
 
-    /// Log in using an jwt auth token (alternative to using username and password, does not require a mfa token). Can be obtained using the `login` command.
-    #[arg(long, global = true)]
-    pub auth_token: Option<String>,
-
-    /// Store the auth token after a successful login. The token will be used for subseqent logins bypassing the need for a mfa token.
-    #[arg(long = "store-token", default_value_t = false, global = true)]
-    pub store_auth_token: bool,
-
     /// Add a HTTP header when connecting to Uptime Kuma.
     #[arg(long = "header", value_name = "KEY=VALUE", global = true)]
     pub headers: Vec<String>,
@@ -157,7 +149,6 @@ impl From<Cli> for Config {
             .set_override_option("password", value.password.clone()).unwrap()
             .set_override_option("mfa_token", value.mfa_token.clone()).unwrap()
             .set_override_option("mfa_secret", value.mfa_secret.clone()).unwrap()
-            .set_override_option("auth_token", value.auth_token.clone()).unwrap()
             .set_override_option(
                 "headers",
                 match value.headers.is_empty() {
@@ -221,4 +212,24 @@ pub(crate) enum Commands {
         #[command(flatten)]
         command: crate::login::Command,
     },
+}
+
+#[cfg(test)]
+mod uptime_kuma_3_tests {
+    use super::Cli;
+    use clap::Parser;
+
+    #[test]
+    fn reusable_token_flags_are_not_accepted() {
+        let parsed = Cli::try_parse_from([
+            "kuma",
+            "--url",
+            "http://localhost:3001",
+            "--store-token",
+            "monitor",
+            "list",
+        ]);
+
+        assert!(parsed.is_err());
+    }
 }

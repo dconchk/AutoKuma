@@ -1280,7 +1280,8 @@ monitor_type! {
 
         #[serde(rename = "proxyId")]
         #[serde(alias = "proxy_id")]
-        pub proxy_id: Option<String>,
+        #[serde_as(as = "Option<DeserializeNumberLenient>")]
+        pub proxy_id: Option<i32>,
 
         #[serde(rename = "method")]
         #[serde_inline_default(Some(HttpMethod::GET))]
@@ -1379,7 +1380,8 @@ monitor_type! {
 
         #[serde(rename = "proxyId")]
         #[serde(alias = "proxy_id")]
-        pub proxy_id: Option<String>,
+        #[serde_as(as = "Option<DeserializeNumberLenient>")]
+        pub proxy_id: Option<i32>,
 
         #[serde(rename = "method")]
         #[serde_inline_default(Some(HttpMethod::GET))]
@@ -1519,7 +1521,8 @@ monitor_type! {
         pub remote_browsers_toggle: Option<bool>,
 
         #[serde(rename = "remote_browser")]
-        pub remote_browser: Option<String>,
+        #[serde_as(as = "Option<DeserializeNumberLenient>")]
+        pub remote_browser: Option<i32>,
     }
 }
 
@@ -1902,3 +1905,43 @@ impl Monitor {
 }
 
 pub type MonitorList = HashMap<String, Monitor>;
+
+#[cfg(test)]
+mod uptime_kuma_3_tests {
+    use super::Monitor;
+    use serde_json::json;
+
+    #[test]
+    fn http_derived_monitors_accept_numeric_proxy_ids_from_uptime_kuma_3() {
+        let keyword: Monitor =
+            serde_json::from_value(json!({"type": "keyword", "proxyId": 1})).unwrap();
+        let json_query: Monitor =
+            serde_json::from_value(json!({"type": "json-query", "proxyId": 2})).unwrap();
+
+        match keyword {
+            Monitor::Keyword { value } => assert_eq!(value.proxy_id, Some(1)),
+            monitor => panic!("expected keyword monitor, got {:?}", monitor.monitor_type()),
+        }
+        match json_query {
+            Monitor::JsonQuery { value } => assert_eq!(value.proxy_id, Some(2)),
+            monitor => panic!(
+                "expected json-query monitor, got {:?}",
+                monitor.monitor_type()
+            ),
+        }
+    }
+
+    #[test]
+    fn real_browser_accepts_numeric_remote_browser_id_from_uptime_kuma_3() {
+        let monitor: Monitor =
+            serde_json::from_value(json!({"type": "real-browser", "remote_browser": 1})).unwrap();
+
+        match monitor {
+            Monitor::RealBrowser { value } => assert_eq!(value.remote_browser, Some(1)),
+            monitor => panic!(
+                "expected real-browser monitor, got {:?}",
+                monitor.monitor_type()
+            ),
+        }
+    }
+}

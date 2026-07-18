@@ -233,7 +233,12 @@ async fn main() {
 
     tokio::spawn(server::start_server(config, metrics));
 
-    sync.run().await;
+    sync.run()
+        .await
+        .log_error(std::module_path!(), |e| {
+            format!("AutoKuma synchronization failed: {}", e)
+        })
+        .unwrap_or_die(1);
 
     logger.shutdown();
 }

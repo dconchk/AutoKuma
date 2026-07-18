@@ -1,11 +1,11 @@
 use crate::{
+    better_auth::{BetterAuthClient, BetterAuthCredentials},
     docker_host::{DockerHost, DockerHostList},
     error::{Error, InvalidReferenceError, Result, TotpResult},
     event::Event,
     maintenance::{Maintenance, MaintenanceList, MaintenanceMonitor, MaintenanceStatusPage},
     monitor::{Monitor, MonitorList},
     notification::{Notification, NotificationList},
-    response::LoginResponse,
     status_page::{PublicGroupList, StatusPage, StatusPageList},
     tag::{Tag, TagDefinition},
     util::ResultLogger,
@@ -15,12 +15,11 @@ use futures_util::FutureExt;
 use itertools::Itertools;
 use log::{debug, trace, warn};
 use native_tls::{Certificate, TlsConnector};
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use rust_socketio::{
     asynchronous::{Client as SocketIO, ClientBuilder},
     Event as SocketIOEvent, Payload,
 };
-use serde::de::DeserializeOwned;
+use serde::de::{DeserializeOwned, IntoDeserializer};
 use serde_json::{json, Value};
 use std::{
     collections::{HashMap, HashSet},
@@ -76,8 +75,7 @@ struct Worker {
     status_pages: Arc<Mutex<StatusPageList>>,
     is_connected: Arc<Mutex<bool>>,
     is_ready: Arc<Mutex<Ready>>,
-    is_logged_in: Arc<Mutex<bool>>,
-    auth_token: Arc<Mutex<Option<String>>>,
+    better_auth: BetterAuthClient,
     reqwest: Arc<Mutex<reqwest::Client>>,
     custom_cert: Option<(String, Certificate)>,
 }
@@ -99,34 +97,24 @@ impl Worker {
             })
             .transpose()?;
 
-        let mut reqwest_builder = reqwest::Client::builder()
-            .danger_accept_invalid_certs(!config.tls.verify)
-            .default_headers(HeaderMap::from_iter(
-                config
-                    .headers
-                    .iter()
-                    .filter_map(|header| header.split_once("="))
-                    .filter_map(|(key, value)| {
-                        match (
-                            HeaderName::from_bytes(key.as_bytes()),
-                            HeaderValue::from_bytes(value.as_bytes()),
-                        ) {
-                            (Ok(key), Ok(value)) => Some((key, value)),
-                            _ => None,
-                        }
-                    }),
-            ));
-
-        if let Some((file, cert)) = &custom_cert {
-            reqwest_builder = reqwest_builder.add_root_certificate(
+        let reqwest_root_certificate = custom_cert
+            .as_ref()
+            .map(|(file, cert)| {
                 reqwest::Certificate::from_der(
                     &cert
                         .to_der()
                         .map_err(|e| Error::InvalidTlsCert(file.clone(), e.to_string()))?,
                 )
-                .map_err(|e| Error::InvalidTlsCert(file.clone(), e.to_string()))?,
-            );
-        }
+                .map_err(|e| Error::InvalidTlsCert(file.clone(), e.to_string()))
+            })
+            .transpose()?;
+        let better_auth = BetterAuthClient::new(
+            config.url.clone(),
+            config.tls.verify,
+            config.headers.clone(),
+            reqwest_root_certificate,
+        )?;
+        let reqwest = better_auth.http_client();
 
         Ok(Arc::new(Worker {
             config: Arc::new(config.clone()),
@@ -138,10 +126,9 @@ impl Worker {
             docker_hosts: Default::default(),
             is_connected: Arc::new(Mutex::new(false)),
             is_ready: Arc::new(Mutex::new(Ready::new())),
-            is_logged_in: Arc::new(Mutex::new(false)),
-            auth_token: Arc::new(Mutex::new(config.auth_token)),
-            reqwest: Arc::new(Mutex::new(reqwest_builder.build().unwrap())),
-            custom_cert: custom_cert,
+            better_auth,
+            reqwest: Arc::new(Mutex::new(reqwest)),
+            custom_cert,
         }))
     }
 
@@ -165,6 +152,16 @@ impl Worker {
         self.is_ready.lock().await.monitor_list = true;
 
         Ok(())
+    }
+
+    fn deserialize_monitor_list(payload: Value) -> Result<MonitorList> {
+        serde_path_to_error::deserialize(payload.into_deserializer()).map_err(|error| {
+            Error::CommunicationError(format!(
+                "Failed to deserialize monitor list at {}: {}",
+                error.path(),
+                error.inner()
+            ))
+        })
     }
 
     async fn on_notification_list(
@@ -203,25 +200,6 @@ impl Worker {
 
     async fn on_info(self: &Arc<Self>) -> Result<()> {
         *self.is_connected.lock().await = true;
-        let logged_in = *self.is_logged_in.lock().await;
-
-        if !logged_in {
-            let auth_token = self.auth_token.lock().await.clone();
-
-            // Try logging in with a token if available
-            if let Some(auth_token) = auth_token {
-                if self.login_by_token(auth_token).await.is_ok() {
-                    return Ok(());
-                }
-            }
-
-            if let (Some(username), Some(password)) = (&self.config.username, &self.config.password)
-            {
-                let mfa_token = self.get_mfa_token()?;
-                self.login(username, password, mfa_token).await?;
-            }
-        }
-
         Ok(())
     }
 
@@ -231,7 +209,6 @@ impl Worker {
 
     async fn on_auto_login(self: &Arc<Self>) -> Result<()> {
         debug!("Logged in using AutoLogin!");
-        *self.is_logged_in.lock().await = true;
         Ok(())
     }
 
@@ -248,12 +225,8 @@ impl Worker {
     async fn on_event(self: &Arc<Self>, event: Event, payload: Value) -> Result<()> {
         match event {
             Event::MonitorList => {
-                self.on_monitor_list(
-                    serde_json::from_value(payload)
-                        .log_error(module_path!(), |_| "Failed to deserialize MonitorList")
-                        .unwrap(),
-                )
-                .await?
+                self.on_monitor_list(Self::deserialize_monitor_list(payload)?)
+                    .await?
             }
             Event::NotificationList => {
                 self.on_notification_list(
@@ -396,84 +369,6 @@ impl Worker {
                 .ok_or_else(|| Error::CallTimeout(method))?;
 
         result
-    }
-
-    pub async fn login(
-        self: &Arc<Self>,
-        username: impl AsRef<str>,
-        password: impl AsRef<str>,
-        token: Option<String>,
-    ) -> Result<()> {
-        let result: Result<LoginResponse> = self
-            .call(
-                "login",
-                vec![serde_json::to_value(HashMap::from([
-                    ("username", json!(username.as_ref())),
-                    ("password", json!(password.as_ref())),
-                    ("token", json!(token)),
-                ]))
-                .unwrap()],
-                "",
-                false,
-            )
-            .await;
-
-        match result {
-            Ok(LoginResponse::TokenRequired { .. }) => Err(Error::TokenRequired),
-            Ok(LoginResponse::Normal {
-                ok: true,
-                token: Some(auth_token),
-                ..
-            }) => {
-                debug!("Logged in as {}!", username.as_ref());
-                *self.is_logged_in.lock().await = true;
-                *self.auth_token.lock().await = Some(auth_token);
-                Ok(())
-            }
-            Ok(LoginResponse::Normal {
-                ok: false,
-                msg: Some(msg),
-                ..
-            }) => Err(Error::LoginError(msg)),
-            Err(e) => {
-                *self.is_logged_in.lock().await = false;
-                Err(e)
-            }
-            _ => {
-                *self.is_logged_in.lock().await = false;
-                Err(Error::LoginError("Unexpect login response".to_owned()))
-            }
-        }
-        .log_warn(std::module_path!(), |e| e.to_string())
-    }
-
-    pub async fn login_by_token(self: &Arc<Self>, auth_token: impl AsRef<str>) -> Result<()> {
-        let result: Result<LoginResponse> = self
-            .call("loginByToken", vec![json!(auth_token.as_ref())], "", false)
-            .await;
-
-        match result {
-            Ok(LoginResponse::TokenRequired { .. }) => Err(Error::TokenRequired),
-            Ok(LoginResponse::Normal { ok: true, .. }) => {
-                debug!("Logged in using auth_token!");
-                *self.is_logged_in.lock().await = true;
-                Ok(())
-            }
-            Ok(LoginResponse::Normal {
-                ok: false,
-                msg: Some(msg),
-                ..
-            }) => Err(Error::LoginError(msg)),
-            Err(e) => {
-                *self.is_logged_in.lock().await = false;
-                Err(e)
-            }
-            _ => {
-                *self.is_logged_in.lock().await = false;
-                Err(Error::LoginError("Unexpect login response".to_owned()))
-            }
-        }
-        .log_warn(std::module_path!(), |e| e.to_string())
     }
 
     async fn get_tags(self: &Arc<Self>) -> Result<Vec<TagDefinition>> {
@@ -1242,6 +1137,20 @@ impl Worker {
     }
 
     pub async fn connect(self: &Arc<Self>) -> Result<()> {
+        match (&self.config.username, &self.config.password) {
+            (Some(username), Some(password)) => {
+                self.better_auth
+                    .authenticate(&BetterAuthCredentials::new(
+                        username.clone(),
+                        password.clone(),
+                        self.get_mfa_token()?,
+                    ))
+                    .await?;
+            }
+            (None, None) => {}
+            _ => return Err(Error::NotAuthenticated),
+        }
+
         let mut tls_config = TlsConnector::builder();
 
         tls_config.danger_accept_invalid_certs(!self.config.tls.verify);
@@ -1251,7 +1160,7 @@ impl Worker {
         }
 
         self.is_ready.lock().await.reset();
-        *self.is_logged_in.lock().await = false;
+        *self.is_connected.lock().await = false;
         *self.socket_io.lock().await = None;
 
         let mut builder = ClientBuilder::new(
@@ -1278,6 +1187,17 @@ impl Worker {
             .filter_map(|header| header.split_once("="))
         {
             builder = builder.opening_header(key, value);
+        }
+
+        if let Some(cookie) = self.better_auth.socket_cookie_header()? {
+            builder = builder.opening_header(
+                "cookie",
+                cookie.to_str().map_err(|_| {
+                    Error::CommunicationError(
+                        "Better Auth returned an invalid cookie header".to_owned(),
+                    )
+                })?,
+            );
         }
 
         let handle = Handle::current();
@@ -1396,7 +1316,13 @@ impl Worker {
 /// A client for interacting with Uptime Kuma.
 ///
 /// Example:
-/// ```
+/// ```no_run
+/// # use kuma_client::{Client, Config, Url};
+/// # use kuma_client::monitor::{MonitorGroup, MonitorHttp};
+/// # use kuma_client::notification::Notification;
+/// # use kuma_client::tag::{Tag, TagDefinition};
+/// # #[tokio::main]
+/// # async fn main() {
 /// // Connect to the server
 /// let client = Client::connect(Config {
 ///         url: Url::parse("http://localhost:3001").expect("Invalid URL"),
@@ -1470,6 +1396,7 @@ impl Worker {
 ///
 /// let monitors = client.get_monitors().await.expect("Failed to get monitors");
 /// println!("{:?}", monitors);
+/// # }
 /// ```
 ///
 pub struct Client {
@@ -1727,11 +1654,6 @@ impl Client {
     pub async fn disconnect(&self) -> Result<()> {
         self.worker.disconnect().await
     }
-
-    /// Get the auth token from this client if available.
-    pub async fn get_auth_token(&self) -> Option<String> {
-        self.worker.auth_token.lock().await.clone()
-    }
 }
 
 impl Drop for Client {
@@ -1743,5 +1665,26 @@ impl Drop for Client {
                 .await
                 .log_error(std::module_path!(), |e| e.to_string());
         });
+    }
+}
+
+#[cfg(test)]
+mod uptime_kuma_3_tests {
+    use super::Worker;
+    use serde_json::json;
+
+    #[test]
+    fn monitor_list_schema_errors_report_a_path_without_echoing_values() {
+        let error = Worker::deserialize_monitor_list(json!({
+            "42": {
+                "type": "keyword",
+                "proxyId": {"secret": "must-not-leak"}
+            }
+        }))
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("at 42:"), "{error}");
+        assert!(!error.contains("must-not-leak"));
     }
 }

@@ -242,6 +242,10 @@ pub struct Config {
     #[serde_inline_default(5.0)]
     pub sync_interval: f64,
 
+    /// Run one foreground synchronization and return its result.
+    #[serde_inline_default(false)]
+    pub run_once: bool,
+
     /// The path to the folder in which AutoKuma will search for static Monitor definitions.
     #[serde_inline_default(None)]
     pub static_monitors: Option<String>,
@@ -369,7 +373,6 @@ mod tests {
             ("AUTOKUMA__KUMA__PASSWORD", "secret"),
             ("AUTOKUMA__KUMA__MFA_TOKEN", "123456"),
             ("AUTOKUMA__KUMA__MFA_SECRET", "MFASECRET"),
-            ("AUTOKUMA__KUMA__AUTH_TOKEN", "authtoken"),
             ("AUTOKUMA__KUMA__HEADERS", "X-Test:1,X-Env:2"),
             ("AUTOKUMA__KUMA__CONNECT_TIMEOUT", "10.0"),
             ("AUTOKUMA__KUMA__CALL_TIMEOUT", "20.0"),
@@ -645,6 +648,17 @@ mod tests {
         assert_eq!(parsed.default_settings, "");
         assert_eq!(parsed.snippets, HashMap::new());
         assert!(!parsed.insecure_env_access);
+        assert!(!parsed.run_once);
+    }
+
+    #[test]
+    fn run_once_can_be_enabled_from_the_scheduler_environment() {
+        let parsed = parse_from_environment(&[
+            ("AUTOKUMA__KUMA__URL", "http://localhost:3001"),
+            ("AUTOKUMA__RUN_ONCE", "true"),
+        ]);
+
+        assert!(parsed.run_once);
     }
 
     fn assert_all_settings(parsed: &Config, include_host_tls_fields: bool) {
@@ -653,7 +667,6 @@ mod tests {
         assert_eq!(parsed.kuma.password.as_deref(), Some("secret"));
         assert_eq!(parsed.kuma.mfa_token.as_deref(), Some("123456"));
         assert_eq!(parsed.kuma.mfa_secret.as_deref(), Some("MFASECRET"));
-        assert_eq!(parsed.kuma.auth_token.as_deref(), Some("authtoken"));
         assert_eq!(parsed.kuma.headers, vec!["X-Test:1".to_owned(), "X-Env:2".to_owned()]);
         assert_eq!(parsed.kuma.connect_timeout, 10.0);
         assert_eq!(parsed.kuma.call_timeout, 20.0);
@@ -733,7 +746,6 @@ mod tests {
                     "password": "secret",
                     "mfa_token": "123456",
                     "mfa_secret": "MFASECRET",
-                    "auth_token": "authtoken",
                     "headers": ["X-Test:1", "X-Env:2"],
                     "connect_timeout": 10.0,
                     "call_timeout": 20.0,
@@ -810,7 +822,6 @@ mod tests {
             password = "secret"
             mfa_token = "123456"
             mfa_secret = "MFASECRET"
-            auth_token = "authtoken"
             headers = ["X-Test:1", "X-Env:2"]
             connect_timeout = 10.0
             call_timeout = 20.0
@@ -900,7 +911,6 @@ mod tests {
                                 "password": "secret",
                                 "mfa_token": "123456",
                                 "mfa_secret": "MFASECRET",
-                                "auth_token": "authtoken",
                                 "headers": ["X-Test:1", "X-Env:2"],
                                 "connect_timeout": 10.0,
                                 "call_timeout": 20.0,

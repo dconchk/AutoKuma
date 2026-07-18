@@ -48,6 +48,9 @@ pub(crate) mod deserialize;
 
 #[cfg(feature = "runtime")]
 #[doc(hidden)]
+pub mod better_auth;
+#[cfg(feature = "runtime")]
+#[doc(hidden)]
 pub mod client;
 #[cfg(feature = "runtime")]
 #[doc(hidden)]

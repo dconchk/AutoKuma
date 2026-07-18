@@ -18,7 +18,6 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 pub struct Sync {
     app_state: Arc<AppState>,
-    auth_token: Option<String>,
     sources: Vec<Box<dyn Source>>,
     client: Option<Arc<Client>>,
     metrics: Arc<Metrics>,
@@ -29,7 +28,6 @@ impl Sync {
         let state = Arc::new(AppState::new(config)?);
         Ok(Self {
             app_state: state.clone(),
-            auth_token: state.config.kuma.auth_token.clone(),
             sources: crate::sources::get_sources(state),
             client: None,
             metrics,
@@ -207,11 +205,7 @@ impl Sync {
 
     async fn get_connection(&mut self) -> Result<Arc<Client>> {
         if self.client.is_none() {
-            let kuma_config = kuma_client::Config {
-                auth_token: self.auth_token.clone(),
-                ..self.app_state.config.kuma.clone()
-            };
-            let kuma = Client::connect(kuma_config).await?;
+            let kuma = Client::connect(self.app_state.config.kuma.clone()).await?;
             self.client = Some(Arc::new(kuma));
         }
 
@@ -232,6 +226,15 @@ impl Sync {
         )
     }
 
+    fn is_terminal_authentication_error(err: &crate::error::Error) -> bool {
+        matches!(
+            err,
+            crate::error::Error::Kuma(
+                KumaError::LoginError(_) | KumaError::TokenRequired | KumaError::NotAuthenticated
+            )
+        )
+    }
+
     async fn do_sync(&mut self) -> Result<()> {
         let start = Instant::now();
         let result = self.do_sync_inner().await;
@@ -248,10 +251,6 @@ impl Sync {
         let kuma = self.get_connection().await?;
 
         self.app_state.db.migrate(&self.app_state, &kuma).await?;
-
-        if let Some(auth_token) = kuma.get_auth_token().await {
-            self.auth_token = Some(auth_token);
-        }
 
         let current_entities = get_managed_entities(&self.app_state, &kuma).await?;
 
@@ -414,10 +413,25 @@ impl Sync {
         Ok(())
     }
 
-    pub async fn run(&mut self) {
-        if let Err(err) = self.init().await {
+    async fn shutdown(&mut self) {
+        log::info!("Shutting down...");
+        for source in &mut self.sources {
+            _ = source.shutdown().await.log_error(std::module_path!(), |e| {
+                format!("Failed to gracefully shutdown source: {}", e)
+            });
+        }
+    }
+
+    pub async fn run(&mut self) -> Result<()> {
+        self.init().await.map_err(|err| {
             error!("Encountered error during init: {}", err);
-            return;
+            err
+        })?;
+
+        if self.app_state.config.run_once {
+            let result = self.do_sync().await;
+            self.shutdown().await;
+            return result;
         }
 
         async fn shutdown_signal() {
@@ -438,6 +452,10 @@ impl Sync {
         loop {
             if let Err(err) = self.do_sync().await {
                 warn!("Encountered error during sync: {}", err);
+                if Self::is_terminal_authentication_error(&err) {
+                    self.shutdown().await;
+                    return Err(err);
+                }
                 if Self::is_connection_error(&err) {
                     debug!("Connection error detected, will reconnect on next cycle");
                     self.client = None;
@@ -456,11 +474,28 @@ impl Sync {
             }
         }
 
-        log::info!("Shutting down...");
-        for source in &mut self.sources {
-            _ = source.shutdown().await.log_error(std::module_path!(), |e| {
-                format!("Failed to gracefully shutdown source: {}", e)
-            });
+        self.shutdown().await;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod uptime_kuma_3_tests {
+    use super::Sync;
+    use crate::error::{Error, KumaError};
+
+    #[test]
+    fn authentication_failures_are_terminal_instead_of_periodically_retried() {
+        for error in [
+            KumaError::LoginError("rejected".to_owned()),
+            KumaError::TokenRequired,
+            KumaError::NotAuthenticated,
+        ] {
+            assert!(Sync::is_terminal_authentication_error(&Error::Kuma(error)));
         }
+
+        assert!(!Sync::is_terminal_authentication_error(&Error::Kuma(
+            KumaError::Disconnected
+        )));
     }
 }

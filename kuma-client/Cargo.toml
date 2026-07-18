@@ -41,6 +41,7 @@ rust_socketio = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_alias = { workspace = true }
 serde_json = { workspace = true }
+serde_path_to_error = { workspace = true }
 serde_merge = { workspace = true }
 serde_repr = { workspace = true }
 serde_with = { workspace = true }
@@ -58,3 +59,6 @@ url = { workspace = true }
 shadow-rs = { workspace = true, features = ["build"] }
 serde_json = { workspace = true }
 serde = { workspace = true }
+
+[dev-dependencies]
+axum = { workspace = true }

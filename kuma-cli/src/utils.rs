@@ -6,7 +6,6 @@ use inkjet::{
     Highlighter, InkjetError,
 };
 use kuma_client::Config;
-use log::warn;
 use owo_colors::Style;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -17,27 +16,9 @@ use tokio::{fs, task};
 pub(crate) type Result<T> = kuma_client::error::Result<T>;
 
 pub(crate) async fn connect(config: &Config, cli: &Cli) -> kuma_client::Client {
-    let config = if config.auth_token.is_none() {
-        Config {
-            auth_token: load_auth_token().await,
-            ..config.clone()
-        }
-    } else {
-        config.clone()
-    };
-
-    let client = kuma_client::Client::connect(config)
+    kuma_client::Client::connect(config.clone())
         .await
-        .unwrap_or_die(cli);
-
-    if cli.store_auth_token {
-        let auth_token = client.get_auth_token().await;
-        if let Some(auth_token) = auth_token {
-            store_auth_token(&auth_token).await;
-        }
-    }
-
-    client
+        .unwrap_or_die(cli)
 }
 
 #[derive(ValueEnum, Clone, Debug)]
@@ -155,28 +136,6 @@ pub(crate) async fn clear_auth_token() {
     {
         _ = fs::remove_file(auth_file).await
     }
-}
-
-pub(crate) async fn store_auth_token(auth_token: &str) {
-    if let Some(auth_file) =
-        dirs::config_local_dir().map(|dir| dir.join("autokuma").join("auth.txt"))
-    {
-        _ = std::fs::create_dir_all(auth_file.parent().unwrap());
-
-        if let Err(err) = fs::write(auth_file, auth_token).await {
-            warn!("Failed to store auth token: {}", err);
-        }
-    }
-}
-
-pub(crate) async fn load_auth_token() -> Option<String> {
-    if let Some(auth_file) =
-        dirs::config_local_dir().map(|dir| dir.join("autokuma").join("auth.txt"))
-    {
-        return fs::read_to_string(auth_file).await.ok();
-    }
-
-    None
 }
 
 pub(crate) trait CollectOrUnwrap: Iterator {

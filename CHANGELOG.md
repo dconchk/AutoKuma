@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Add Uptime Kuma 3 Better Auth session support with username/password, TOTP, in-memory cookies, pre-Socket.IO validation, and bounded authentication failure handling.
+- Add `run_once` / `AUTOKUMA__RUN_ONCE` for one foreground synchronization with process-level failure propagation.
+
+### Changed
+- Target Uptime Kuma 3 authentication and remove reusable JWT token login and persistence from AutoKuma and Kuma CLI.
+
+### Fixed
+- Accept numeric proxy and remote-browser IDs returned by Uptime Kuma 3 monitor inventory.
+- Report monitor-list schema failures without panicking or echoing monitor values.
+
 ## [2.1.0-rc.2] - 2026-06-18
 ### Added
 - Add `/health` and `/metrics` (Prometheus-compatible) HTTP endpoints, with a `HEALTHCHECK` in the Dockerfile, see #164. Listens on port 8090 by default (configurable via `healthcheck_port`, set to `null` to disable)
@@ -227,4 +238,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - First release
-

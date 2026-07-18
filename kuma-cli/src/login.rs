@@ -6,6 +6,10 @@ use clap::{CommandFactory, Parser};
 use kuma_client::Config;
 use serde_json::json;
 
+fn login_success() -> serde_json::Value {
+    json!({"ok": true, "message": "login ok"})
+}
+
 #[derive(Parser, Clone, Debug)]
 #[command()]
 pub(crate) struct Command {
@@ -23,7 +27,10 @@ pub(crate) struct Command {
 pub(crate) async fn handle(command: &Command, config: &Config, cli: &Cli) {
     if command.clear {
         utils::clear_auth_token().await;
-        print_value(&json!({"ok": true, "message" : "auth token cleared"}), cli);
+        print_value(
+            &json!({"ok": true, "message" : "legacy auth token cleared"}),
+            cli,
+        );
         return;
     }
 
@@ -45,20 +52,23 @@ pub(crate) async fn handle(command: &Command, config: &Config, cli: &Cli) {
     let config = Config {
         username: Some(username),
         password: Some(password),
-        auth_token: None,
         ..config.clone()
     };
 
-    let client = utils::connect(&config, cli).await;
+    let _client = utils::connect(&config, cli).await;
+    print_value(&login_success(), cli);
+}
 
-    let auth_token = client.get_auth_token().await;
-
-    if let Some(token) = auth_token {
-        print_value(
-            &json!({"ok": true, "message" : "login ok", "token": token}),
-            cli,
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn login_success_never_contains_reusable_session_material() {
+        let value = super::login_success();
+        assert_eq!(
+            value,
+            serde_json::json!({"ok": true, "message": "login ok"})
         );
-    } else {
-        print_value(&json!({"error" : "no auth token received"}), cli);
+        assert!(value.get("token").is_none());
+        assert!(value.get("cookie").is_none());
     }
 }
