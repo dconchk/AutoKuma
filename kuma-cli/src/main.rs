@@ -6,6 +6,7 @@ use kuma_client::Config;
 mod cli;
 mod database;
 mod docker_host;
+mod inventory;
 mod login;
 mod maintenance;
 mod monitor;
@@ -25,6 +26,7 @@ async fn main() {
     let config = Config::from(cli.clone());
 
     match &cli.command {
+        Some(Commands::Inventory {}) => inventory::handle(&config, &cli).await,
         Some(Commands::Monitor { command }) => monitor::handle(command, &config, &cli).await,
         Some(Commands::Notification { command }) => {
             notification::handle(command, &config, &cli).await

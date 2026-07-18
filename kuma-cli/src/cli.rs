@@ -172,6 +172,9 @@ impl From<Cli> for Config {
 #[derive(Subcommand, Clone, Debug)]
 #[command(arg_required_else_help = true)]
 pub(crate) enum Commands {
+    /// Read monitors and tags through one authenticated connection.
+    Inventory {},
+
     /// Manage Monitors
     Monitor {
         #[command(subcommand)]
@@ -216,7 +219,7 @@ pub(crate) enum Commands {
 
 #[cfg(test)]
 mod uptime_kuma_3_tests {
-    use super::Cli;
+    use super::{Cli, Commands};
     use clap::Parser;
 
     #[test]
@@ -231,5 +234,13 @@ mod uptime_kuma_3_tests {
         ]);
 
         assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn combined_inventory_is_a_single_top_level_command() {
+        let parsed =
+            Cli::try_parse_from(["kuma", "--url", "http://localhost:3001", "inventory"]).unwrap();
+
+        assert!(matches!(parsed.command, Some(Commands::Inventory {})));
     }
 }
