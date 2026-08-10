@@ -15,6 +15,10 @@ name = "crdgen"
 path = "src/crdgen.rs"
 required-features = ["kubernetes"]
 
+[[bin]]
+name = "autokuma-state"
+path = "src/state_tool.rs"
+
 [features]
 default = ["kubernetes"]
 kubernetes = ["dep:kube", "dep:k8s-openapi", "dep:schemars", "dep:serde_yaml"]

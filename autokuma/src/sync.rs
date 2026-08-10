@@ -1,5 +1,8 @@
 use crate::app_state::AppState;
-use crate::entity::{Entity, merge_entities};
+use crate::entity::{
+    Entity, merge_entities_for_update, prepare_entity_for_create,
+    prepare_monitor_recreation,
+};
 use crate::kuma::get_managed_entities;
 use crate::metrics::{Metrics, entity_type_index};
 use crate::name::{EntitySelector, Name};
@@ -36,7 +39,7 @@ impl Sync {
 
     async fn create_entity(&self, kuma: &Client, id: &String, entity: &Entity) -> Result<()> {
         info!("Creating new {}: {}", entity.entity_type(), id);
-        match entity.clone() {
+        match prepare_entity_for_create(entity) {
             Entity::Monitor(monitor) => {
                 match kuma.add_monitor(monitor).await {
                     Ok(monitor) => {
@@ -140,7 +143,7 @@ impl Sync {
         current: &Entity,
         new: &Entity,
     ) -> Result<()> {
-        let merge = merge_entities(&current, &new, None);
+        let merge = merge_entities_for_update(current, new, None)?;
 
         if current != &merge {
             debug!(
@@ -150,6 +153,7 @@ impl Sync {
             );
 
             if current.entity_type() != new.entity_type() {
+                let recreation = prepare_monitor_recreation(current, new)?;
                 info!(
                     "Recreating entity because type changed: {} ({:?} -> {:?})",
                     id,
@@ -157,7 +161,7 @@ impl Sync {
                     new.entity_type()
                 );
                 self.delete_entity(kuma, id, &current).await?;
-                self.create_entity(kuma, id, &new).await?;
+                self.create_entity(kuma, id, &recreation).await?;
                 return Ok(());
             }
 

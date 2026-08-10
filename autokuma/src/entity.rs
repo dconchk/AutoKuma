@@ -556,3 +556,225 @@ pub fn merge_entities(current: &Entity, new: &Entity, addition_tags: Option<Vec<
 
     serde_merge::omerge(current, new).unwrap()
 }
+
+pub fn merge_entities_for_update(
+    current: &Entity,
+    new: &Entity,
+    addition_tags: Option<Vec<Tag>>,
+) -> Result<Entity> {
+    let mut merged = merge_entities(current, new, addition_tags);
+
+    if let (
+        Entity::Monitor(current_monitor),
+        Entity::Monitor(_),
+        Entity::Monitor(merged_monitor),
+    ) = (current, new, &mut merged)
+    {
+        let current_active = current_monitor
+            .common()
+            .active()
+            .ok_or_else(|| {
+                Error::InternalError(
+                    "Cannot update existing monitor because its active state is unavailable"
+                        .to_owned(),
+                )
+            })?;
+        *merged_monitor.common_mut().active_mut() = Some(current_active);
+    }
+
+    Ok(merged)
+}
+
+pub fn prepare_entity_for_create(entity: &Entity) -> Entity {
+    let mut prepared = entity.clone();
+
+    if let Entity::Monitor(monitor) = &mut prepared {
+        if monitor.common().active().is_none() {
+            let create_paused = monitor.common().create_paused() == &Some(true);
+            *monitor.common_mut().active_mut() = Some(!create_paused);
+        }
+    }
+
+    prepared
+}
+
+pub fn prepare_monitor_recreation(
+    current: &Entity,
+    new: &Entity,
+) -> Result<Entity> {
+    let mut recreation = new.clone();
+
+    if let (
+        Entity::Monitor(current_monitor),
+        Entity::Monitor(recreated_monitor),
+    ) = (current, &mut recreation)
+    {
+        let current_active = current_monitor
+            .common()
+            .active()
+            .ok_or_else(|| {
+                Error::InternalError(
+                    "Cannot update existing monitor because its active state is unavailable"
+                        .to_owned(),
+                )
+            })?;
+        *recreated_monitor.common_mut().id_mut() = None;
+        *recreated_monitor.common_mut().active_mut() = Some(current_active);
+        *recreated_monitor.common_mut().create_paused_mut() =
+            Some(!current_active);
+    }
+
+    Ok(recreation)
+}
+
+#[cfg(test)]
+mod monitor_active_state_tests {
+    use super::{
+        Entity, merge_entities_for_update, prepare_entity_for_create,
+        prepare_monitor_recreation,
+    };
+    use kuma_client::monitor::MonitorType;
+    use serde_json::json;
+
+    fn monitor(
+        active: Option<bool>,
+        interval: i32,
+        create_paused: Option<bool>,
+    ) -> Entity {
+        let mut value = json!({
+            "type": "ping",
+            "name": "Bounded target",
+            "hostname": "example.invalid",
+            "interval": interval,
+        });
+        let fields = value.as_object_mut().unwrap();
+        if let Some(active) = active {
+            fields.insert("active".to_owned(), json!(active));
+        }
+        if let Some(create_paused) = create_paused {
+            fields.insert("create_paused".to_owned(), json!(create_paused));
+        }
+        Entity::Monitor(serde_json::from_value(value).unwrap())
+    }
+
+    fn active(entity: &Entity) -> Option<bool> {
+        match entity {
+            Entity::Monitor(monitor) => *monitor.common().active(),
+            entity => panic!("expected monitor, got {:?}", entity.entity_type()),
+        }
+    }
+
+    fn interval(entity: &Entity) -> Option<i32> {
+        match entity {
+            Entity::Monitor(monitor) => *monitor.common().interval(),
+            entity => panic!("expected monitor, got {:?}", entity.entity_type()),
+        }
+    }
+
+    fn create_paused(entity: &Entity) -> Option<bool> {
+        match entity {
+            Entity::Monitor(monitor) => *monitor.common().create_paused(),
+            entity => panic!("expected monitor, got {:?}", entity.entity_type()),
+        }
+    }
+
+    #[test]
+    fn update_merge_preserves_paused_and_active_live_states() {
+        for current_active in [false, true] {
+            for desired_active in [None, Some(!current_active)] {
+                let current = monitor(Some(current_active), 60, None);
+                let desired = monitor(desired_active, 30, None);
+
+                let merged =
+                    merge_entities_for_update(&current, &desired, None).unwrap();
+
+                assert_eq!(active(&merged), Some(current_active));
+                assert_eq!(interval(&merged), Some(30));
+            }
+        }
+    }
+
+    #[test]
+    fn active_state_difference_alone_does_not_produce_an_edit() {
+        let current = monitor(Some(false), 60, None);
+        let desired = monitor(Some(true), 60, None);
+
+        let merged =
+            merge_entities_for_update(&current, &desired, None).unwrap();
+
+        assert_eq!(active(&merged), Some(false));
+        assert_eq!(current, merged);
+    }
+
+    #[test]
+    fn update_merge_fails_closed_without_a_live_active_state() {
+        let current = monitor(None, 60, None);
+        let desired = monitor(Some(true), 30, None);
+
+        let error =
+            merge_entities_for_update(&current, &desired, None).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("active state is unavailable")
+        );
+    }
+
+    #[test]
+    fn new_monitors_default_active_unless_creation_is_explicitly_paused() {
+        let default = prepare_entity_for_create(&monitor(None, 60, None));
+        let explicitly_active =
+            prepare_entity_for_create(&monitor(Some(true), 60, None));
+        let explicitly_paused =
+            prepare_entity_for_create(&monitor(None, 60, Some(true)));
+
+        assert_eq!(active(&default), Some(true));
+        assert_eq!(active(&explicitly_active), Some(true));
+        assert_eq!(active(&explicitly_paused), Some(false));
+    }
+
+    #[test]
+    fn monitor_type_recreation_preserves_live_state_before_delete() {
+        for current_active in [false, true] {
+            let current = monitor(Some(current_active), 60, None);
+            let mut desired = monitor(Some(!current_active), 30, None);
+            desired = match desired {
+                Entity::Monitor(_) => Entity::Monitor(
+                    serde_json::from_value(json!({
+                        "type": "http",
+                        "name": "Bounded target",
+                        "url": "https://example.invalid",
+                        "active": !current_active,
+                        "interval": 30,
+                    }))
+                    .unwrap(),
+                ),
+                entity => entity,
+            };
+
+            let recreation =
+                prepare_monitor_recreation(&current, &desired).unwrap();
+
+            assert_eq!(
+                recreation.entity_type(),
+                crate::entity::EntityType::Monitor(MonitorType::Http)
+            );
+            assert_eq!(active(&recreation), Some(current_active));
+            assert_eq!(
+                create_paused(&recreation),
+                Some(!current_active)
+            );
+        }
+
+        assert!(
+            prepare_monitor_recreation(
+                &monitor(None, 60, None),
+                &monitor(Some(true), 30, None),
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("active state is unavailable")
+        );
+    }
+}

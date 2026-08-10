@@ -6,6 +6,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sled::IVec;
+use sled::transaction::{ConflictableTransactionError, TransactionError, Transactional};
 
 use crate::{
     config::Config,
@@ -354,6 +355,129 @@ impl AppDB {
         Ok(())
     }
 
+    // This maintenance entry point is called by the autokuma-state binary.
+    #[allow(dead_code)]
+    pub fn adopt_monitor_ids(
+        &self,
+        owner_tag_name: &str,
+        expected_owner_tag_id: i32,
+        adopted_owner_tag_id: i32,
+        mappings: &[(&str, Option<i32>, i32)],
+    ) -> Result<()> {
+        let identities = mappings
+            .iter()
+            .map(|(identity, _, _)| *identity)
+            .collect::<HashSet<_>>();
+        let expected_ids = mappings
+            .iter()
+            .filter_map(|(_, expected_id, _)| *expected_id)
+            .collect::<HashSet<_>>();
+        let adopted_ids = mappings
+            .iter()
+            .map(|(_, _, adopted_id)| *adopted_id)
+            .collect::<HashSet<_>>();
+        if owner_tag_name.trim().is_empty()
+            || expected_owner_tag_id <= 0
+            || adopted_owner_tag_id <= 0
+            || mappings.is_empty()
+            || mappings.iter().any(|(identity, expected_id, adopted_id)| {
+                identity.trim().is_empty()
+                    || expected_id.is_some_and(|id| id <= 0)
+                    || *adopted_id <= 0
+            })
+            || identities.len() != mappings.len()
+            || expected_ids.len()
+                != mappings
+                    .iter()
+                    .filter(|(_, expected_id, _)| expected_id.is_some())
+                    .count()
+            || adopted_ids.len() != mappings.len()
+        {
+            return Err(Error::InternalError(
+                "Ownership adoption plan is invalid".to_owned(),
+            ));
+        }
+
+        let monitors = &self.tables.monitors.tree;
+        let tags = &self.tables.tags.tree;
+        let transaction: std::result::Result<(), TransactionError<String>> =
+            (monitors, tags).transaction(|(tx_monitors, tx_tags)| {
+                let abort = |message: String| {
+                    ConflictableTransactionError::Abort(message)
+                };
+                for (identity, expected_id, _) in mappings {
+                    let current = tx_monitors.get(identity.as_bytes())?;
+                    match (expected_id, current) {
+                        (None, None) => {}
+                        (Some(expected_id), Some(current)) => {
+                            let current_id = current
+                                .as_ref()
+                                .try_into()
+                                .map(i32::from_le_bytes)
+                                .map_err(|_| {
+                                    abort(format!(
+                                        "Monitor ownership mapping is invalid for {}",
+                                        identity,
+                                    ))
+                                })?;
+                            if current_id != *expected_id {
+                                return Err(abort(format!(
+                                    "Monitor ownership mapping changed for {}",
+                                    identity,
+                                )));
+                            }
+                        }
+                        _ => {
+                            return Err(abort(format!(
+                                "Monitor ownership mapping changed for {}",
+                                identity,
+                            )));
+                        }
+                    }
+                }
+                let current_tag = tx_tags
+                    .get(owner_tag_name.as_bytes())?
+                    .ok_or_else(|| {
+                        abort("Owner tag mapping is missing".to_owned())
+                    })?;
+                let current_tag_id = current_tag
+                    .as_ref()
+                    .try_into()
+                    .map(i32::from_le_bytes)
+                    .map_err(|_| {
+                        abort("Owner tag mapping is invalid".to_owned())
+                    })?;
+                if current_tag_id != expected_owner_tag_id {
+                    return Err(abort(
+                        "Owner tag mapping changed before adoption".to_owned(),
+                    ));
+                }
+
+                for (identity, _, adopted_id) in mappings {
+                    tx_monitors.insert(
+                        identity.as_bytes(),
+                        adopted_id.to_le_bytes().to_vec(),
+                    )?;
+                }
+                tx_tags.insert(
+                    owner_tag_name.as_bytes(),
+                    adopted_owner_tag_id.to_le_bytes().to_vec(),
+                )?;
+                Ok(())
+            });
+
+        match transaction {
+            Ok(()) => {
+                self.db.flush()?;
+                Ok(())
+            }
+            Err(TransactionError::Abort(message)) => {
+                Err(Error::InternalError(message))
+            }
+            Err(TransactionError::Storage(error)) => Err(error.into()),
+        }
+    }
+
     fn get_entries<T>(table: &impl IDTable<T>) -> Result<Vec<(String, T)>> {
         Ok(table
             .tree()
@@ -608,5 +732,143 @@ impl AppState {
         })
         .flatten()
         .collect_vec()
+    }
+}
+
+#[cfg(test)]
+mod ownership_adoption_tests {
+    use super::AppDB;
+    use crate::name::Name;
+    use std::{fs, path::PathBuf};
+
+    fn temporary_data_path(label: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "autokuma-ownership-adoption-{}-{}-{}",
+            label,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        fs::create_dir(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn ownership_adoption_repoints_all_monitors_and_the_owner_tag() {
+        let path = temporary_data_path("success");
+        let db = AppDB::new(path.to_str().unwrap()).unwrap();
+        db.store_id(
+            Name::Monitor("circuit_v1_7_100_primary".to_owned()),
+            6,
+        )
+        .unwrap();
+        db.store_id(Name::Tag("dcon-circuit-owner".to_owned()), 4)
+            .unwrap();
+
+        db.adopt_monitor_ids(
+            "dcon-circuit-owner",
+            4,
+            1,
+            &[
+                ("circuit_v1_7_100_primary", Some(6), 63),
+                ("circuit_v1_7_101_backup", None, 64),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(
+            db.get_id::<i32>(Name::Monitor(
+                "circuit_v1_7_100_primary".to_owned(),
+            ))
+            .unwrap(),
+            Some(63),
+        );
+        assert_eq!(
+            db.get_id::<i32>(Name::Monitor(
+                "circuit_v1_7_101_backup".to_owned(),
+            ))
+            .unwrap(),
+            Some(64),
+        );
+        assert_eq!(
+            db.get_id::<i32>(Name::Tag("dcon-circuit-owner".to_owned()))
+                .unwrap(),
+            Some(1),
+        );
+
+        drop(db);
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn stale_or_duplicate_adoption_plan_leaves_every_mapping_unchanged() {
+        for (label, mappings) in [
+            (
+                "stale",
+                vec![
+                    ("circuit_v1_7_100_primary", Some(999), 63),
+                    ("circuit_v1_7_101_backup", Some(7), 64),
+                ],
+            ),
+            (
+                "duplicate-target",
+                vec![
+                    ("circuit_v1_7_100_primary", Some(6), 63),
+                    ("circuit_v1_7_101_backup", Some(7), 63),
+                ],
+            ),
+        ] {
+            let path = temporary_data_path(label);
+            let db = AppDB::new(path.to_str().unwrap()).unwrap();
+            db.store_id(
+                Name::Monitor("circuit_v1_7_100_primary".to_owned()),
+                6,
+            )
+            .unwrap();
+            db.store_id(
+                Name::Monitor("circuit_v1_7_101_backup".to_owned()),
+                7,
+            )
+            .unwrap();
+            db.store_id(Name::Tag("dcon-circuit-owner".to_owned()), 4)
+                .unwrap();
+
+            assert!(
+                db.adopt_monitor_ids(
+                    "dcon-circuit-owner",
+                    4,
+                    1,
+                    &mappings,
+                )
+                .is_err()
+            );
+
+            assert_eq!(
+                db.get_id::<i32>(Name::Monitor(
+                    "circuit_v1_7_100_primary".to_owned(),
+                ))
+                .unwrap(),
+                Some(6),
+            );
+            assert_eq!(
+                db.get_id::<i32>(Name::Monitor(
+                    "circuit_v1_7_101_backup".to_owned(),
+                ))
+                .unwrap(),
+                Some(7),
+            );
+            assert_eq!(
+                db.get_id::<i32>(Name::Tag(
+                    "dcon-circuit-owner".to_owned(),
+                ))
+                .unwrap(),
+                Some(4),
+            );
+
+            drop(db);
+            fs::remove_dir_all(path).unwrap();
+        }
     }
 }
