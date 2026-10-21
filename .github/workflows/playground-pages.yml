@@ -35,6 +35,8 @@ jobs:
 
             - name: Cache Rust dependencies
               uses: Swatinem/rust-cache@v2
+              with:
+                  workspaces: src
 
             - name: Install Trunk
               uses: taiki-e/install-action@v2
@@ -42,13 +44,13 @@ jobs:
                   tool: trunk
 
             - name: Build playground
-              working-directory: autokuma-playground
+              working-directory: src/autokuma-playground
               run: trunk build --release
 
             - name: Upload Pages artifact
               uses: actions/upload-pages-artifact@v3
               with:
-                  path: autokuma-playground/dist
+                  path: src/autokuma-playground/dist
 
     deploy:
         needs: build

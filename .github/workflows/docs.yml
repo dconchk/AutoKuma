@@ -8,6 +8,10 @@ on:
       - "v*"
   workflow_dispatch:
 
+defaults:
+  run:
+    working-directory: src
+
 jobs:
   deploy:
     runs-on: ubuntu-latest

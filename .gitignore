@@ -1,5 +1,5 @@
-/target
-/site
+/src/target
+/src/site
 */dist
 config.toml
 autokuma.toml
@@ -7,7 +7,10 @@ kuma.toml
 docker.sock
 .vscode
 */logo.svg
-!/logo.svg
+!/src/logo.svg
 *.snap
-/autokuma.db
+/src/autokuma.db
 test_monitors
+
+scratch/
+.claude/worktrees/

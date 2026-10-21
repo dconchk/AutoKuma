@@ -7,6 +7,10 @@ on:
     tags:
       - "*"
 
+defaults:
+  run:
+    working-directory: src
+
 jobs:
   build:
     runs-on: ${{ matrix.runs-on }}
@@ -35,7 +39,7 @@ jobs:
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-            target/
+            src/target/
           key: ${{ matrix.runs-on }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Set up Rust
@@ -73,7 +77,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: autokuma-${{ matrix.os }}
-          path: dist/*
+          path: src/dist/*
 
   github-release:
     needs: [build]
@@ -94,6 +98,8 @@ jobs:
       - name: Parse Changelog
         id: changelog
         uses: coditory/changelog-parser@v1
+        with:
+          path: src/CHANGELOG.md
 
       - name: Download All Artifacts
         uses: actions/download-artifact@v4
