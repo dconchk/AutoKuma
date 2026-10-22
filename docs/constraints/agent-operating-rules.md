@@ -11,12 +11,12 @@ tags:
   - operating-rules
 generated:
   by: process:spaces-project-deploy
-  at: "2026-10-21T05:39:20+00:00"
-updated: "2026-10-21T05:39:20+00:00"
+  at: "2026-10-22T19:45:49+00:00"
+updated: "2026-10-22T19:45:49+00:00"
 verified:
   - by: process:spaces-project-deploy
-    at: "2026-10-21T05:39:20+00:00"
-stale_after: "2027-04-19"
+    at: "2026-10-22T19:45:49+00:00"
+stale_after: "2027-04-20"
 ---
 
 # Agent operating rules
@@ -41,6 +41,7 @@ You work unattended: nobody answers a question mid-task, so a "Shall I…?" stop
 - Before a command that changes system state (a restart, a delete, a config edit), check that the evidence supports that specific action: a signal that matches a known failure may have another cause.
 - Edit files surgically when a rewrite would not change the result.
 - Commit the tests the ticket or the project's workflow requires, sized like the neighbouring test files: about one focused test per stated behaviour. Scratch checks stay scratch.
+- Write any scratch file, redirected background command output, or log to `~/tmp` (or `<stateHome>/tmp` inside a HOPPER state home), never `/tmp` or `/private/tmp`, so outputs survive reboots.
 
 ## Reporting
 
