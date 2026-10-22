@@ -11,12 +11,12 @@ tags:
   - coding-standards
 generated:
   by: process:spaces-project-deploy
-  at: "2026-10-21T05:39:20+00:00"
-updated: "2026-10-21T05:39:20+00:00"
+  at: "2026-10-22T18:22:23+00:00"
+updated: "2026-10-22T18:22:23+00:00"
 verified:
   - by: process:spaces-project-deploy
-    at: "2026-10-21T05:39:20+00:00"
-stale_after: "2027-04-19"
+    at: "2026-10-22T18:22:23+00:00"
+stale_after: "2027-04-20"
 ---
 
 # Coding standards
@@ -66,7 +66,7 @@ A seam the frozen diff creates or reorders is judged on the Spec axis whether or
 ## TypeScript 7 & `.mts` testing standards
 
 - **TypeScript 7 (`tsgo`) compiler & syntax.** Configure `tsconfig.json` with an explicit `"rootDir"`, `"module": "nodenext"`, `"moduleResolution": "nodenext"`, `"erasableSyntaxOnly": true`, `"verbatimModuleSyntax": true`, `"noImplicitOverride": true`, and `"noFallthroughCasesInSwitch": true`. Rely on TS 7 defaults (`"strict": true`, `"target": "es2025"`, `"alwaysStrict": true`, `"libReplacement": false`). Never use removed TS 6 deprecations (`"baseUrl"`, `"outFile"`, `"downlevelIteration"`, legacy `"moduleResolution": "node"` or `"classic"`, or `import ... assert { type: "json" }` — use `with { type: "json" }`). Ban runtime-emitting TypeScript constructs (`enum`, `namespace`, constructor parameter properties) in favour of `as const` objects with derived union types and explicit class fields. Enforce explicit file extensions (`.mts` or `.mjs`) on relative imports and explicit `import type` for type-only imports. Never use legacy JS TypeScript compiler API runners (`ts-node`, `ts-jest`, or runtime `import ts from "typescript"` hooks).
-- **VM-friendly `.mts` test execution & caching.** Prefix test and drain commands with a shared persistent V8 bytecode cache on local RAM disk (`NODE_COMPILE_CACHE=/tmp/node-compile-cache`) — never create or delete per-test ephemeral `mkdtempSync` compile caches. Cap compiler and test worker concurrency on VMs (`--checkers 2` / `--builders 2`, `--test-concurrency=2` to `4`, or `VERIFY_WORKERS=10` with round-robin directory bucket scheduling weighted by `durationBaseline`) so worker spawns do not saturate vCPUs. When using `verify.mts` (`passCache`), register any `.test.mts` or `.test.support.mts` file that reads filesystem paths dynamically in `TEST_RUNTIME_INPUTS` (`src/checks/structure.mts`) and never resolve base-root `new URL("../../../../", import.meta.url)` variable bindings to `"."` so `runtimeInputsFor` keeps tests cacheable across runs.
+- **VM-friendly `.mts` test execution & caching.** Prefix test and drain commands with a shared persistent V8 bytecode cache on local RAM disk (`NODE_COMPILE_CACHE=/tmp/node-compile-cache`) — never create or delete per-test ephemeral `mkdtempSync` compile caches. Cap compiler and test worker concurrency on VMs (`--checkers 2` / `--builders 2`, `--test-concurrency=2` to `4`, or `VERIFY_WORKERS=10` with round-robin directory bucket scheduling) so worker spawns do not saturate vCPUs.
 - **Black-box entry-point testing & zero internal mocking.** Test packages and modules through their public entry points (`index.mts`, CLI/module seams) as black-box behavioral tests; do not maintain 1:1 internal helper test sprawl or monolithic `export *` barrel chains. Never mock internal modules (`vi.mock` / `mock.module` on internal helpers) or assert internal call counts; inject fakes only at external system boundaries (HTTP, DB, filesystem, clock). Collapse repetitive input variations into table-driven parameterized tests (`for (const tc of cases)` or `test.each`). When using `dependency-cruiser`, disable `tsPreCompilationDeps` and keep boundary checks in top-level `check` rather than the inner test loop.
 - **Zero unsafe type assertions.** Ban `any` and `as unknown as T` double-assertions in production and test code. Narrow `unknown` with type guards or schema validators at boundaries, and shrink test setup bloat with `@total-typescript/shoehorn` (`fromPartial(...)`) or strongly-typed factory helpers (`createTestX(overrides?: Partial<X>): X`).
 

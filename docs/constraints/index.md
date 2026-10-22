@@ -1,2 +1,3 @@
 - [Agent operating rules](agent-operating-rules.md) - Rules for unattended turns: ending a turn, keeping strictly to scope, handling unrelated bugs, and reporting.
 - [Autonomy](autonomy.md) - How far an agent proceeds on its own, how instruction conflicts resolve, and how completion reports read.
+- [Output style](output-style.md) - Action-first output style: lead with the next action, number multi-step work, restate state across turns, suppress tangents, give concrete time estimates, and make completed work visible.
