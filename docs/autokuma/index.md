@@ -1,4 +1,2 @@
-# Autokuma Concept Bundle
-
-- [autokuma.md](./autokuma.md) — Bounded Kuma 3 authentication, reconciliation, inventory and approved ownership adoption.
-- [reference/](./reference/index.md) — Reference routing index.
+- [AutoKuma Fork — System Architecture](autokuma.md) - Crates, binaries, authentication flow, reconciliation and ownership-adoption workflows, and safety boundaries of CHK's Uptime Kuma 3 AutoKuma fork.
+- [reference](reference/index.md) - Reference routing index.
