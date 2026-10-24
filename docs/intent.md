@@ -13,16 +13,6 @@ tags:
   - monitoring
   - rust
 relationships:
-  - type: depends_on
-    target: "constraints/autonomy.md"
-  - type: depends_on
-    target: "constraints/agent-operating-rules.md"
-  - type: depends_on
-    target: "conventions/coding-standards.md"
-  - type: depends_on
-    target: "conventions/codebase-design.md"
-  - type: depends_on
-    target: "policies/review-rubric.md"
   - type: related_to
     target: "autokuma/autokuma.md"
 generated:
